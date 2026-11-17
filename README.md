@@ -1,6 +1,6 @@
 # F1 Race Finder
 
-A semantic search engine for every Formula 1 World Championship race since 1950. You type a description of a race, like "wet race where the championship leader pulled out because it was too dangerous", and it finds it (that's the 1976 Japanese GP).
+A semantic search engine for every Formula 1 World Championship race since 1950. You describe a race, like "Multi 21 team order ignored by Vettel" or "car split in two and burst into flames", and it finds it.
 
 Live app: LIVE_APP_URL
 
@@ -14,7 +14,7 @@ I built this for the Week 13 semantic search activity in AIPI 510 at Duke. I'm a
 2. **Chunk it.** Each Wikipedia article is split by its own sections (Background, Qualifying, Race, etc.) into chunks of about 180 words. I skip sections that are just tables, like results and standings. Every chunk gets the race name stuck on the front before embedding, so a sentence like "he retired on lap 2" still knows which race it came from. I also added one short "race facts" chunk per race built from the API data (winner, team, grid position).
 3. **Embed it.** Each chunk is embedded with `BAAI/bge-small-en-v1.5`. Why that model is below.
 4. **Store it.** The ~13.7k vectors go into a persistent Chroma database (`chroma_db/`), along with metadata like season, winner and team. The metadata is what the sidebar filters use.
-5. **Search.** The app embeds your query, pulls the closest 150 chunks from Chroma, and groups them by race. That way you get 8 different races instead of 8 paragraphs from the same one.
+5. **Search.** The app embeds your query and pulls the closest 100 chunks from Chroma. A small cross-encoder model then re-scores those 100 (more on that below). Finally the results are grouped by race, so you get 8 different races instead of 8 paragraphs from the same one.
 
 ## Picking the embedding model
 
@@ -23,13 +23,18 @@ The starter notebook uses `all-MiniLM-L6-v2`, so I tested it against `bge-small-
 | Model | Hit@1 | Hit@5 | MRR |
 |---|---|---|---|
 | `all-MiniLM-L6-v2` (starter) | 20% | 32% | 0.28 |
-| `bge-small-en-v1.5` | **28%** | **52%** | **0.38** |
+| `bge-small-en-v1.5` | 28% | 52% | 0.38 |
+| `bge-small-en-v1.5` + re-ranker | **48%** | **68%** | **0.57** |
 
 Hit@1 means the right race was the top result, and Hit@5 means it was somewhere in the top 5. MRR is the mean reciprocal rank. 25 queries I wrote myself isn't a real benchmark, but it was enough to pick a model.
 
 bge-small won pretty clearly, so that's what the app uses. It takes about twice as long to embed everything, but that only happens once when the database is built, and searching is still instant.
 
 Honestly, the numbers are lower than I expected. Looking at the misses, most of them are queries where the key detail is a specific fact rather than a vibe. "Crashgate" (2008 Singapore) and the 1997 Schumacher/Villeneuve collision never made the top 20, probably because those stories are spread across long articles and the part that explains the scandal isn't in one chunk. Queries describing what a race *felt* like (fire, rain, team orders, a surprise winner) work a lot better. That's part of why hybrid search is first on my list below.
+
+### Adding a re-ranker
+
+To get the numbers up without re-embedding everything, I added a second step. Chroma still finds the 100 closest chunks, but then `cross-encoder/ms-marco-MiniLM-L6-v2` re-scores each one. A cross-encoder reads the query and the passage *together* instead of comparing two separate vectors, which makes it a lot more accurate. It's also too slow to run on all 13k chunks, which is why it only sees the top 100. It took the top-1 rate from 28% to 48% and adds about 2 seconds per search. I also tried `bge-reranker-base`, which scored slightly better (52% / 76%) but took around 14 seconds per search, so it wasn't worth it.
 
 ## Running it yourself
 
@@ -49,6 +54,7 @@ pip install -r requirements-dev.txt
 python scripts/fetch_data.py     # downloads races + Wikipedia articles
 python scripts/build_index.py    # chunks, embeds, writes chroma_db/
 python scripts/evaluate.py       # reruns the model comparison
+python scripts/evaluate.py --rerank   # embedding vs. embedding + re-ranker
 ```
 
 ## Files
@@ -70,7 +76,6 @@ python scripts/evaluate.py       # reruns the model comparison
 ## What I'd add next
 
 - Hybrid search (keyword + vector), since exact names and numbers like "lap 53" are something embeddings aren't great at.
-- A re-ranker on the top results.
 - An LLM that writes a short answer using the retrieved passages (basically turning this into RAG).
 
 ## Data

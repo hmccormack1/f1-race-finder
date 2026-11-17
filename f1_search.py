@@ -20,8 +20,9 @@ Race, Post-race, ...). We chunk *along that structure*:
   data (winner, team, podium, circuit, grid). This makes factual queries such
   as "Alonso win from 14th on the grid" work even when the article is short.
 
-Search returns *races*, not chunks: we pull the top chunks from Chroma and
-keep the best-scoring chunk per race.
+Search is two-stage: Chroma returns the 100 nearest chunks by embedding
+similarity, a cross-encoder re-scores those 100 against the query, and the
+results are collapsed to *races*, keeping the best chunk per race.
 """
 
 from __future__ import annotations
@@ -34,6 +35,11 @@ import pandas as pd
 MAX_WORDS = 180
 COLLECTION_NAME = "f1_races"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+# Second-stage re-ranker: reads (query, passage) together, so it is far more
+# accurate than comparing two separate vectors, but too slow to run on all
+# 13k passages. We only run it on the top candidates from Chroma.
+RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
+RERANK_CANDIDATES = 100
 # bge models were trained with this instruction prepended to *queries*
 # (not documents) for retrieval.
 QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
@@ -179,21 +185,33 @@ def query_text(query: str, model_name: str = EMBED_MODEL) -> str:
 
 # --------------------------------------------------------------- search ---
 
-def best_per_race(ids: list[str], distances: list[float], metadatas: list[dict],
-                  documents: list[str], k: int) -> list[dict]:
-    """Collapse chunk hits to race hits, keeping each race's best chunk.
+def rerank(cross_encoder, query: str, metadatas: list[dict], documents: list[str]):
+    """Re-score Chroma's candidates with a cross-encoder, best first.
 
-    Chroma (cosine space) returns distance = 1 - cosine similarity.
+    Returns (scores, metadatas, documents) sorted by score. Scores are mapped
+    through a sigmoid to 0-1 so they're easier to show in the UI.
     """
+    import numpy as np
+    pairs = [(query, f"{m['title']} - {m.get('section', '')}: {d}")
+             for m, d in zip(metadatas, documents)]
+    logits = np.asarray(cross_encoder.predict(pairs))
+    order = np.argsort(-logits)
+    scores = 1 / (1 + np.exp(-logits[order]))
+    return (scores.tolist(), [metadatas[i] for i in order], [documents[i] for i in order])
+
+
+def best_per_race(scores: list[float], metadatas: list[dict],
+                  documents: list[str], k: int) -> list[dict]:
+    """Collapse chunk hits (sorted best first) to race hits, keeping each race's best chunk."""
     seen: dict[str, dict] = {}
-    for cid, dist, meta, doc in zip(ids, distances, metadatas, documents):
+    for score, meta, doc in zip(scores, metadatas, documents):
         rid = meta["race_id"]
         if rid in seen:
             seen[rid]["also_matched"] += 1
             continue
         seen[rid] = {
             "race_id": rid,
-            "score": 1 - dist,
+            "score": score,
             "section": meta.get("section", ""),
             "passage": doc,
             "also_matched": 0,

@@ -11,6 +11,7 @@ Metrics (race-level, after collapsing chunks to races):
 Usage:
     python scripts/evaluate.py                       # compare default models
     python scripts/evaluate.py --models BAAI/bge-small-en-v1.5
+    python scripts/evaluate.py --rerank   # the deployed pipeline: Chroma + cross-encoder
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ from sentence_transformers import SentenceTransformer
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from f1_search import embed_text, query_text  # noqa: E402
+from f1_search import (COLLECTION_NAME, EMBED_MODEL, RERANK_CANDIDATES,  # noqa: E402
+                       RERANK_MODEL, embed_text, query_text, rerank)
 from build_index import load_chunks  # noqa: E402
 
 # (query, season, race name as in races.csv)
@@ -126,10 +128,50 @@ def evaluate(model_name: str, chunks, targets) -> dict:
     }
 
 
+def summarize(ranks: list) -> str:
+    hit1 = np.mean([r == 1 for r in ranks])
+    hit5 = np.mean([bool(r) and r <= 5 for r in ranks])
+    mrr = np.mean([1 / r if r else 0 for r in ranks])
+    return f"Hit@1 {hit1:.0%}  Hit@5 {hit5:.0%}  MRR {mrr:.2f}"
+
+
+def evaluate_rerank(targets) -> None:
+    """Evaluate the built chroma_db with and without the cross-encoder re-ranker."""
+    import chromadb
+    from chromadb.config import Settings
+    from sentence_transformers import CrossEncoder
+
+    model = SentenceTransformer(EMBED_MODEL)
+    ce = CrossEncoder(RERANK_MODEL)
+    col = chromadb.PersistentClient(path=str(ROOT / "chroma_db"), settings=Settings(
+        anonymized_telemetry=False)).get_collection(COLLECTION_NAME)
+
+    def rank_of(target, metas):
+        order = list(dict.fromkeys(m["race_id"] for m in metas))[:20]
+        return order.index(target) + 1 if target in order else None
+
+    before, after = [], []
+    for (q, *_), target in zip(EVAL_SET, targets):
+        res = col.query(query_embeddings=model.encode([query_text(q)], normalize_embeddings=True).tolist(),
+                        n_results=RERANK_CANDIDATES, include=["metadatas", "documents"])
+        metas, docs = res["metadatas"][0], res["documents"][0]
+        before.append(rank_of(target, metas))
+        _, metas2, _ = rerank(ce, q, metas, docs)
+        after.append(rank_of(target, metas2))
+    print(f"Embedding only:      {summarize(before)}")
+    print(f"+ cross-encoder:     {summarize(after)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
+    parser.add_argument("--rerank", action="store_true",
+                        help="evaluate the built chroma_db with the re-ranker")
     args = parser.parse_args()
+
+    if args.rerank:
+        evaluate_rerank(race_ids(EVAL_SET))
+        return
 
     chunks = load_chunks()
     targets = race_ids(EVAL_SET)

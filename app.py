@@ -12,12 +12,12 @@ import chromadb
 import pandas as pd
 import streamlit as st
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
-from f1_search import COLLECTION_NAME, EMBED_MODEL, best_per_race, build_where, query_text
+from f1_search import (COLLECTION_NAME, EMBED_MODEL, RERANK_CANDIDATES, RERANK_MODEL,
+                       best_per_race, build_where, query_text, rerank)
 
 ROOT = Path(__file__).resolve().parent
-CANDIDATE_CHUNKS = 150  # chunks pulled from Chroma before collapsing to races
 
 EXAMPLES = [
     "Title decided on the last lap in the rain",
@@ -85,6 +85,11 @@ def load_model() -> SentenceTransformer:
     return SentenceTransformer(EMBED_MODEL)
 
 
+@st.cache_resource(show_spinner="Loading the re-ranker...")
+def load_reranker() -> CrossEncoder:
+    return CrossEncoder(RERANK_MODEL)
+
+
 @st.cache_resource(show_spinner="Opening the vector database...")
 def load_collection():
     client = chromadb.PersistentClient(path=str(ROOT / "chroma_db"),
@@ -101,12 +106,12 @@ def search(query: str, k: int, season_range, winner, team) -> list[dict]:
     q_emb = load_model().encode([query_text(query)], normalize_embeddings=True).tolist()
     res = load_collection().query(
         query_embeddings=q_emb,
-        n_results=CANDIDATE_CHUNKS,
+        n_results=RERANK_CANDIDATES,
         where=build_where(season_range, winner, team),
-        include=["distances", "metadatas", "documents"],
+        include=["metadatas", "documents"],
     )
-    return best_per_race(res["ids"][0], res["distances"][0], res["metadatas"][0],
-                         res["documents"][0], k)
+    scores, metas, docs = rerank(load_reranker(), query, res["metadatas"][0], res["documents"][0])
+    return best_per_race(scores, metas, docs, k)
 
 
 # ------------------------------------------------------------------ UI ---
@@ -131,7 +136,7 @@ with st.sidebar:
     st.caption(
         "Race reports from Wikipedia (CC BY-SA 4.0); results data from the "
         "[Jolpica F1 API](https://github.com/jolpica/jolpica-f1). Embeddings: "
-        f"`{EMBED_MODEL}`. Vector store: Chroma."
+        f"`{EMBED_MODEL}`, re-ranked with `{RERANK_MODEL}`. Vector store: Chroma."
     )
 
 if "query" not in st.session_state:
@@ -207,8 +212,9 @@ else:
                `BAAI/bge-small-en-v1.5`, chosen over the starter model after an evaluation on 25
                famous-race queries (see the README).
             4. **Vector DB.** The ~13.7k vectors live in a persistent **Chroma** collection.
-            5. **Search.** Your query is embedded the same way, Chroma finds the nearest passages
-               (cosine similarity), and results are grouped so you see each race once, with the
-               passage that matched best.
+            5. **Search.** Your query is embedded the same way and Chroma finds the 100 nearest
+               passages. A cross-encoder then re-scores those 100 by reading the query and passage
+               together, and results are grouped so you see each race once, with the passage that
+               matched best.
             """
         )

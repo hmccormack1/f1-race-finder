@@ -2,7 +2,7 @@
 
 A semantic search engine for every Formula 1 World Championship race since 1950. You describe a race, like "Multi 21 team order ignored by Vettel" or "car split in two and burst into flames", and it finds it.
 
-Live app: LIVE_APP_URL
+Live app: https://f1-race-finder-74klxkzvx2ngv78zzb6qwc.streamlit.app/
 
 ![screenshot](docs/screenshot.png)
 

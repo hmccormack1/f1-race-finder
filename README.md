@@ -28,7 +28,7 @@ The starter notebook uses `all-MiniLM-L6-v2`, so I tested it against `bge-small-
 
 Hit@1 means the right race was the top result, and Hit@5 means it was somewhere in the top 5. MRR is the mean reciprocal rank. 25 queries I wrote myself isn't a real benchmark, but it was enough to pick a model.
 
-bge-small won pretty clearly, so that's what the app uses. It takes about twice as long to embed everything, but that only happens once when the database is built, and searching is still instant.
+bge-small won pretty clearly, so that's what the app uses. It takes about twice as long to embed everything, but that only happens once when the database is built, so it doesn't slow down searching.
 
 Honestly, the numbers are lower than I expected. Looking at the misses, most of them are queries where the key detail is a specific fact rather than a vibe. "Crashgate" (2008 Singapore) and the 1997 Schumacher/Villeneuve collision never made the top 20, probably because those stories are spread across long articles and the part that explains the scandal isn't in one chunk. Queries describing what a race *felt* like (fire, rain, team orders, a surprise winner) work a lot better. That's part of why hybrid search is first on my list below.
 
@@ -70,7 +70,7 @@ python scripts/evaluate.py --rerank   # embedding vs. embedding + re-ranker
 ## Things I ran into
 
 - Wikipedia rate limited me almost immediately when I requested one article at a time. Switching to 50 articles per request (about 24 requests instead of 1,169) fixed most of it.
-- One link from the F1 API pointed to a page that doesn't exist (the 2026 Barcelona GP), so the script falls back to searching by "season + race name".
+- One link from the F1 API pointed to a page that doesn't exist (the 2026 Barcelona GP). I added a fallback that tries "season + race name" instead, but Wikipedia was still rate limiting me, so that race only has its basic facts (winner, circuit, podium) and no race report for now.
 - Old races from the 1950s sometimes only have a paragraph or two on Wikipedia, so they're harder to find than modern ones.
 
 ## What I'd add next

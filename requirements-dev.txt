@@ -1,0 +1,4 @@
+# Extra dependencies for rebuilding the dataset and index from scratch.
+-r requirements.txt
+requests==2.34.2
+mwparserfromhell==0.7.2

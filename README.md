@@ -20,11 +20,16 @@ I built this for the Week 13 semantic search activity in AIPI 510 at Duke. I'm a
 
 The starter notebook uses `all-MiniLM-L6-v2`, so I tested it against `bge-small-en-v1.5`, which is about the same size. I wrote 25 test queries describing famous races without naming them (things like Crashgate, Senna and Prost at Suzuka, Abu Dhabi 2021) and checked where the right race showed up.
 
-EVAL_TABLE
+| Model | Hit@1 | Hit@5 | MRR |
+|---|---|---|---|
+| `all-MiniLM-L6-v2` (starter) | 20% | 32% | 0.28 |
+| `bge-small-en-v1.5` | **28%** | **52%** | **0.38** |
 
 Hit@1 means the right race was the top result, and Hit@5 means it was somewhere in the top 5. MRR is the mean reciprocal rank. 25 queries I wrote myself isn't a real benchmark, but it was enough to pick a model.
 
-MODEL_CHOICE
+bge-small won pretty clearly, so that's what the app uses. It takes about twice as long to embed everything, but that only happens once when the database is built, and searching is still instant.
+
+Honestly, the numbers are lower than I expected. Looking at the misses, most of them are queries where the key detail is a specific fact rather than a vibe. "Crashgate" (2008 Singapore) and the 1997 Schumacher/Villeneuve collision never made the top 20, probably because those stories are spread across long articles and the part that explains the scandal isn't in one chunk. Queries describing what a race *felt* like (fire, rain, team orders, a surprise winner) work a lot better. That's part of why hybrid search is first on my list below.
 
 ## Running it yourself
 
